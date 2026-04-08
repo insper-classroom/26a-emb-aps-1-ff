@@ -7,11 +7,14 @@
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
 
+#include "ili9341/ili9341.h"
+#include "gfx/gfx_ili9341.h"
+
 #define N_CORES 4
 #define MAX_SEQ 100
 
 // Troque para o pino do seu módulo de áudio/buzzer PWM
-#define AUDIO_PIN 26
+#define AUDIO_PIN 10
 
 #define SHOW_TIME_MS     350
 #define PRESS_TIME_MS    220
@@ -26,14 +29,14 @@ enum Cor {
 };
 
 const uint BTN_PINS[N_CORES] = {2, 3, 4, 5};
-const uint LED_PINS[N_CORES] = {18, 19, 20, 21};
+const uint LED_PINS[N_CORES] = {6, 7, 8, 9};
 
 // Frequências dos sons de cada LED
 const uint TONE_FREQS[N_CORES] = {
-    262, // vermelho  - Dó
+    220, // vermelho  - Lá baixo
     330, // verde     - Mi
-    392, // azul      - Sol
-    523  // amarelo   - Dó agudo
+    440, // azul      - Lá
+    660  // amarelo   - Mi agudo
 };
 
 volatile int pending_button = -1;
@@ -114,7 +117,7 @@ void play_tone_blocking(uint freq, uint duration_ms) {
 
     pwm_set_clkdiv(audio_slice, clkdiv);
     pwm_set_wrap(audio_slice, top);
-    pwm_set_chan_level(audio_slice, audio_channel, top / 2); // 50% duty
+    pwm_set_chan_level(audio_slice, audio_channel, top / 4); // 25% duty
 
     sleep_ms(duration_ms);
 
@@ -129,25 +132,33 @@ void show_color_with_sound(int cor, int duration_ms) {
 }
 
 void feedback_acerto(void) {
-    for (int i = 0; i < N_CORES; i++) {
-        gpio_put(LED_PINS[i], 1);
+    for (int k = 0; k < 3; k++) {
+        for (int i = 0; i < N_CORES; i++) {
+            gpio_put(LED_PINS[i], 1);
+        }
+        sleep_ms(100);
+        for (int i = 0; i < N_CORES; i++) {
+            gpio_put(LED_PINS[i], 0);
+        }
+        sleep_ms(100);
     }
     play_tone_blocking(880, 120);
-    for (int i = 0; i < N_CORES; i++) {
-        gpio_put(LED_PINS[i], 0);
-    }
     sleep_ms(100);
 }
 
 void feedback_erro(void) {
     for (int k = 0; k < 3; k++) {
-        for (int i = 0; i < N_CORES; i++) {
-            gpio_put(LED_PINS[i], 1);
+        for (int blink = 0; blink < 3; blink++) {
+            for (int i = 0; i < N_CORES; i++) {
+                gpio_put(LED_PINS[i], 1);
+            }
+            sleep_ms(80);
+            for (int i = 0; i < N_CORES; i++) {
+                gpio_put(LED_PINS[i], 0);
+            }
+            sleep_ms(80);
         }
         play_tone_blocking(160, 250);
-        for (int i = 0; i < N_CORES; i++) {
-            gpio_put(LED_PINS[i], 0);
-        }
         sleep_ms(120);
     }
 }
@@ -160,6 +171,10 @@ void gerar_sequencia(int *ordem, int tamanho) {
 
 uint32_t esperar_inicio(void) {
     printf("Pressione qualquer botao para iniciar.\n");
+
+    gfx_clear();
+    gfx_drawText(10, 10, "Pressione qualquer botao");
+    gfx_drawText(10, 30, "para iniciar");
 
     pending_button = -1;
     button_event = false;
@@ -183,6 +198,12 @@ int main() {
     init_leds_buttons();
     init_audio();
 
+    // Inicializar LCD
+    LCD_initDisplay();
+    LCD_setRotation(1); // Paisagem
+    gfx_init();
+    gfx_clear();
+
     int ordem[MAX_SEQ];
 
     while (true) {
@@ -197,6 +218,12 @@ int main() {
 
         while (!perdeu && rounds <= MAX_SEQ) {
             sleep_ms(400);
+
+            // Exibir round no LCD
+            char buf[32];
+            sprintf(buf, "Round: %d", rounds);
+            gfx_clear();
+            gfx_drawText(10, 10, buf);
 
             // mostra a sequência
             for (int i = 0; i < rounds; i++) {
@@ -238,6 +265,10 @@ int main() {
 
             if (perdeu) {
                 printf("Perdeu na rodada %d\n", rounds);
+                char buf[64];
+                sprintf(buf, "Perdeu! Pontuacao: %d", rounds - 1);
+                gfx_clear();
+                gfx_drawText(10, 10, buf);
                 feedback_erro();
             } else {
                 printf("Rodada %d concluida\n", rounds);
@@ -249,6 +280,10 @@ int main() {
 
         if (rounds > MAX_SEQ) {
             printf("Voce venceu!\n");
+            char buf[64];
+            sprintf(buf, "Venceu! Pontuacao: %d", MAX_SEQ);
+            gfx_clear();
+            gfx_drawText(10, 10, buf);
             for (int i = 0; i < 3; i++) {
                 feedback_acerto();
                 sleep_ms(100);
