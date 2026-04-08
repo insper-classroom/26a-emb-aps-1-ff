@@ -241,89 +241,132 @@ uint32_t genius_esperar_inicio(void) {
     return seed;
 }
 
+typedef enum {
+    GAME_STATE_AGUARDANDO_INICIO,
+    GAME_STATE_INICIAR_RODADA,
+    GAME_STATE_MOSTRAR_SEQUENCIA,
+    GAME_STATE_JOGANDO,
+    GAME_STATE_PERDEU,
+    GAME_STATE_GANHOU
+} game_state_t;
+
 void genius_play_game(void) {
     int ordem[MAX_SEQ];
-    
-    uint32_t seed = genius_esperar_inicio();
-    srand(seed);
-    genius_gerar_sequencia(ordem, MAX_SEQ);
 
+    uint32_t seed = 0;
+    uint32_t inicio_espera = 0;
     int rounds = 1;
-    bool perdeu = false;
+    int input_index = 0;
+    bool jogo_ativo = true;
+    game_state_t state = GAME_STATE_AGUARDANDO_INICIO;
 
-    printf("Novo jogo iniciado. Seed = %lu\n", seed);
+    while (jogo_ativo) {
+        switch (state) {
+            case GAME_STATE_AGUARDANDO_INICIO:
+                seed = genius_esperar_inicio();
+                srand(seed);
+                genius_gerar_sequencia(ordem, MAX_SEQ);
 
-    while (!perdeu && rounds <= MAX_SEQ) {
-        sleep_ms(400);
+                rounds = 1;
+                input_index = 0;
 
-        // Exibir round no LCD
-        char buf[32];
-        sprintf(buf, "Round: %d", rounds);
-        gfx_clear();
-        gfx_drawText(10, 10, buf);
+                printf("Novo jogo iniciado. Seed = %lu\n", seed);
+                state = GAME_STATE_INICIAR_RODADA;
+                break;
 
-        // Mostra a sequência
-        for (int i = 0; i < rounds; i++) {
-            genius_show_color_with_sound(ordem[i], SHOW_TIME_MS);
-        }
+            case GAME_STATE_INICIAR_RODADA: {
+                sleep_ms(400);
+                char buf[32];
+                sprintf(buf, "Round: %d", rounds);
+                gfx_clear();
+                gfx_drawText(10, 10, buf);
 
-        // Jogador repete
-        for (int i = 0; i < rounds; i++) {
-            uint32_t inicio_espera = to_ms_since_boot(get_absolute_time());
+                state = GAME_STATE_MOSTRAR_SEQUENCIA;
+                break;
+            }
 
-            pending_button = -1;
-            button_event = false;
+            case GAME_STATE_MOSTRAR_SEQUENCIA:
+                for (int i = 0; i < rounds; i++) {
+                    genius_show_color_with_sound(ordem[i], SHOW_TIME_MS);
+                }
 
-            while (!button_event) {
-                uint32_t agora = to_ms_since_boot(get_absolute_time());
-                if ((agora - inicio_espera) >= INPUT_TIMEOUT_MS) {
-                    perdeu = true;
+                input_index = 0;
+                pending_button = -1;
+                button_event = false;
+                inicio_espera = to_ms_since_boot(get_absolute_time());
+
+                state = GAME_STATE_JOGANDO;
+                break;
+
+            case GAME_STATE_JOGANDO: {
+                while (!button_event) {
+                    uint32_t agora = to_ms_since_boot(get_absolute_time());
+                    if ((agora - inicio_espera) >= INPUT_TIMEOUT_MS) {
+                        state = GAME_STATE_PERDEU;
+                        break;
+                    }
+                    tight_loop_contents();
+                }
+
+                if (state == GAME_STATE_PERDEU) {
                     break;
                 }
-                tight_loop_contents();
-            }
 
-            if (perdeu) {
+                int cor_jogada = pending_button;
+                pending_button = -1;
+                button_event = false;
+
+                genius_show_color_with_sound(cor_jogada, PRESS_TIME_MS);
+
+                if (cor_jogada != ordem[input_index]) {
+                    state = GAME_STATE_PERDEU;
+                    break;
+                }
+
+                input_index++;
+                if (input_index >= rounds) {
+                    printf("Rodada %d concluida\n", rounds);
+                    genius_feedback_acerto();
+                    rounds++;
+                    sleep_ms(250);
+
+                    if (rounds > MAX_SEQ) {
+                        state = GAME_STATE_GANHOU;
+                    } else {
+                        state = GAME_STATE_INICIAR_RODADA;
+                    }
+                } else {
+                    inicio_espera = to_ms_since_boot(get_absolute_time());
+                }
                 break;
             }
 
-            int cor_jogada = pending_button;
-            pending_button = -1;
-            button_event = false;
+            case GAME_STATE_PERDEU: {
+                printf("Perdeu na rodada %d\n", rounds);
+                char buf[64];
+                sprintf(buf, "Perdeu! Pontuacao: %d", rounds - 1);
+                gfx_clear();
+                gfx_drawText(10, 10, buf);
+                genius_feedback_erro();
 
-            // Feedback imediato da tecla pressionada
-            genius_show_color_with_sound(cor_jogada, PRESS_TIME_MS);
-
-            if (cor_jogada != ordem[i]) {
-                perdeu = true;
+                jogo_ativo = false;
                 break;
             }
-        }
 
-        if (perdeu) {
-            printf("Perdeu na rodada %d\n", rounds);
-            char buf[64];
-            sprintf(buf, "Perdeu! Pontuacao: %d", rounds - 1);
-            gfx_clear();
-            gfx_drawText(10, 10, buf);
-            genius_feedback_erro();
-        } else {
-            printf("Rodada %d concluida\n", rounds);
-            genius_feedback_acerto();
-            rounds++;
-            sleep_ms(250);
-        }
-    }
+            case GAME_STATE_GANHOU: {
+                printf("Voce venceu!\n");
+                char buf[64];
+                sprintf(buf, "Venceu! Pontuacao: %d", MAX_SEQ);
+                gfx_clear();
+                gfx_drawText(10, 10, buf);
+                for (int i = 0; i < 3; i++) {
+                    genius_feedback_acerto();
+                    sleep_ms(100);
+                }
 
-    if (rounds > MAX_SEQ) {
-        printf("Voce venceu!\n");
-        char buf[64];
-        sprintf(buf, "Venceu! Pontuacao: %d", MAX_SEQ);
-        gfx_clear();
-        gfx_drawText(10, 10, buf);
-        for (int i = 0; i < 3; i++) {
-            genius_feedback_acerto();
-            sleep_ms(100);
+                jogo_ativo = false;
+                break;
+            }
         }
     }
 }
