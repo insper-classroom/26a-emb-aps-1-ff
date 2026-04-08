@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
@@ -10,10 +11,11 @@
 #include "ili9341/ili9341.h"
 #include "gfx/gfx_ili9341.h"
 #include "genius.h"
+#include "no.h"
 
 // Pinos e constantes
 #define AUDIO_PIN 10
-#define DEBOUNCE_MS 180
+#define DEBOUNCE_MS 100
 
 const uint BTN_PINS[N_CORES] = {2, 3, 4, 5};
 const uint LED_PINS[N_CORES] = {6, 7, 8, 9};
@@ -33,6 +35,8 @@ volatile uint32_t last_irq_ms = 0;
 
 static uint audio_slice;
 static uint audio_channel;
+
+#define WAV_SAMPLE_RATE 22050
 
 // Callbacks e inicialização
 void btn_callback(uint gpio, uint32_t events) {
@@ -127,6 +131,27 @@ static void play_tone_blocking(uint freq, uint duration_ms) {
     stop_audio();
 }
 
+static void play_wav_blocking(const uint8_t *samples, uint32_t length, uint32_t sample_rate_hz) {
+    if (samples == NULL || length == 0 || sample_rate_hz == 0) {
+        return;
+    }
+
+    pwm_set_clkdiv(audio_slice, 1.0f);
+    pwm_set_wrap(audio_slice, 255);
+
+    uint32_t us_per_sample = 1000000u / sample_rate_hz;
+    if (us_per_sample == 0) {
+        us_per_sample = 1;
+    }
+
+    for (uint32_t i = 0; i < length; i++) {
+        pwm_set_chan_level(audio_slice, audio_channel, samples[i]);
+        sleep_us(us_per_sample);
+    }
+
+    stop_audio();
+}
+
 // Controle de LEDs
 void genius_led_on(int core) {
     if (core >= 0 && core < N_CORES) {
@@ -153,6 +178,10 @@ void genius_led_all_off(void) {
 }
 
 void genius_show_color_with_sound(int cor, int duration_ms) {
+    if (cor < 0 || cor >= N_CORES) {
+        return;
+    }
+
     genius_led_on(cor);
     play_tone_blocking(TONE_FREQS[cor], duration_ms);
     genius_led_off(cor);
@@ -172,16 +201,14 @@ void genius_feedback_acerto(void) {
 }
 
 void genius_feedback_erro(void) {
-    for (int k = 0; k < 3; k++) {
-        for (int blink = 0; blink < 3; blink++) {
-            genius_led_all_on();
-            sleep_ms(80);
-            genius_led_all_off();
-            sleep_ms(80);
-        }
-        play_tone_blocking(160, 250);
-        sleep_ms(120);
+    for (int blink = 0; blink < 4; blink++) {
+        genius_led_all_on();
+        sleep_ms(80);
+        genius_led_all_off();
+        sleep_ms(80);
     }
+
+    play_wav_blocking(WAV_DATA, WAV_DATA_LENGTH, WAV_SAMPLE_RATE);
 }
 
 // Lógica de jogo
